@@ -113,7 +113,7 @@ Note format:
         sys.exit(0)
 
 if __name__ == '__main__':
-    main() __init__(self, channel=1, velocity=64, note_off='off', bpm=120):
+    def __init__(self, channel=1, velocity=64, note_off='off', bpm=120):
         # Validate parameters
         if not (1 <= channel <= 16):
             raise ValueError("MIDI channel must be between 1 and 16")
