@@ -65,15 +65,12 @@ output_note_with_duration() {
         ticks=24
     fi
     
-    # Output note with dots and flush immediately
-    echo -n "$note"
+    # Output note with dots and flush immediately using /dev/stdout
+    printf "%s" "$note" > /dev/stdout
     for ((i=0; i<ticks; i++)); do
-        echo -n "."
+        printf "." > /dev/stdout
     done
-    echo -n " "
-    
-    # Force flush to stdout immediately
-    sync
+    printf " " > /dev/stdout
 }
 
 # Function to process MIDI message
@@ -121,16 +118,16 @@ process_midi_message() {
     esac
 }
 
-# Function to read MIDI data
+# Function to read MIDI data with direct file descriptor access
 read_midi_data() {
     local byte_count=0
     local status_byte=""
     local data1=""
     local data2=""
     
+    # Open MIDI device for reading
     if [ "$MIDI_DEVICE" = "-" ]; then
-        # Read from stdin
-        exec < /dev/stdin
+        exec 3</dev/stdin
     else
         # Check if MIDI device exists
         if [ ! -e "$MIDI_DEVICE" ]; then
@@ -139,22 +136,30 @@ read_midi_data() {
             ls -la /dev/snd/midi* 2>/dev/null >&2 || echo "No MIDI devices found" >&2
             exit 1
         fi
-        
-        # Read from MIDI device
-        exec < "$MIDI_DEVICE"
+        exec 3<"$MIDI_DEVICE"
     fi
     
     echo "Reading MIDI from $MIDI_DEVICE (Channel filter: ${CHANNEL_FILTER:-all})" >&2
     echo "Press Ctrl+C to stop" >&2
     echo "" >&2
     
-    # Read bytes one by one
-    while IFS= read -r -n1 byte; do
-        # Convert to hex
-        hex_byte=$(printf "%02X" "'$byte" 2>/dev/null)
+    # Read bytes directly from file descriptor without pipeline
+    while true; do
+        # Read one byte using dd for unbuffered input
+        byte=$(dd if=/proc/self/fd/3 bs=1 count=1 2>/dev/null | od -An -tx1)
         
-        # Skip if conversion failed
-        [ -z "$hex_byte" ] && continue
+        # Check if we got data
+        if [ -z "$byte" ]; then
+            continue
+        fi
+        
+        # Clean up the byte (remove spaces)
+        hex_byte=$(echo "$byte" | tr -d ' ' | tr 'a-f' 'A-F')
+        
+        # Skip if conversion failed  
+        if [ ${#hex_byte} -ne 2 ]; then
+            continue
+        fi
         
         local dec_byte=$(hex_to_dec "$hex_byte")
         
@@ -178,13 +183,16 @@ read_midi_data() {
                 2)
                     data2="$hex_byte"
                     byte_count=3
-                    # Process complete 3-byte message
+                    # Process complete 3-byte message immediately
                     process_midi_message $(hex_to_dec "$status_byte") $(hex_to_dec "$data1") $(hex_to_dec "$data2")
                     byte_count=1  # Reset for next message (keep status byte)
                     ;;
             esac
         fi
     done
+    
+    # Close file descriptor
+    exec 3<&-
 }
 
 # Cleanup function
