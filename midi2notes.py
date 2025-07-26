@@ -1,235 +1,244 @@
 #!/usr/bin/env python3
 """
-notes2midi.py - Convert text music notes to MIDI hex output for ALSA rawmidi
+midi2notes.py - Convert MIDI rawmidi input to text music notes
 
-Usage: echo "C4.. D4. -. E4..." | python3 notes2midi.py [channel] [velocity] [note_off] [bpm]
+Usage: python3 midi2notes.py [midi_device] [channel_filter]
 
-Notation:
+Output notation:
   C4, D4, etc. - Note names
   . (dots) after notes - Note duration (each dot = 1/6 quarter note = 1 sixteenth note)
-  - (minus) - Silence/rest (each minus = 1/6 quarter note = 1 sixteenth note)
+  - (minus) - Silence/rest between notes (each minus = 1/6 quarter note)
 
 Examples:
-  C4......  - C4 for 6 ticks (1 full quarter note)
-  C4.. --   - C4 for 2 ticks (1/3 quarter), then 2 ticks of silence
-  C4. D4. E4. F4. G4. A4. - Six sixteenth notes (1.5 quarter notes total)
-  At 120 BPM: 1 tick = ~83ms, 1 quarter note = 500ms
+  python3 midi2notes.py /dev/snd/midiC2D0 1
+  cat /dev/snd/midiC2D0 | python3 midi2notes.py - 0
 """
 
 import sys
-import re
+import time
 import argparse
+import signal
+from typing import Dict, Optional
 
 # MIDI timing constants
 PPQN = 6  # Ticks per quarter note (coarse resolution)
-MICROSECS_PER_MIN = 60000000
+TICK_DURATION_MS = 83  # Approximate duration per tick at 120 BPM (~83ms)
 
-# Note to MIDI number mapping
-NOTE_MAP = {
-    'C': 0, 'C#': 1, 'DB': 1, 'D': 2, 'D#': 3, 'EB': 3,
-    'E': 4, 'F': 5, 'F#': 6, 'GB': 6, 'G': 7, 'G#': 8,
-    'AB': 8, 'A': 9, 'A#': 10, 'BB': 10, 'B': 11
-}
-
-class MIDIConverter:
-    def __init__(self, channel=1, velocity=64, note_off='off', bpm=120):
-        # Validate parameters
-        if not (1 <= channel <= 16):
-            raise ValueError("MIDI channel must be between 1 and 16")
-        if not (0 <= velocity <= 127):
-            raise ValueError("Velocity must be between 0 and 127")
-        if note_off not in ['on', 'off', 'auto', 'timed']:
-            raise ValueError("Note-off parameter must be 'on', 'off', 'auto', or 'timed'")
-        if not (30 <= bpm <= 300):
-            raise ValueError("BPM must be between 30 and 300")
+class MIDIToNotesConverter:
+    def __init__(self, midi_device: str = '/dev/snd/midiC2D0', channel_filter: int = 0):
+        self.midi_device = midi_device
+        self.channel_filter = channel_filter
         
-        self.channel = channel - 1  # Convert to 0-based (MIDI channels are 0-15 internally)
-        self.velocity = velocity
-        self.note_off = note_off
-        self.bpm = bpm
+        # Validate channel filter
+        if not (0 <= channel_filter <= 16):
+            raise ValueError("Channel filter must be between 0 (all) and 16")
         
-        # Calculate timing
-        self.microsecs_per_quarter = MICROSECS_PER_MIN // bpm
-        self.microsecs_per_tick = self.microsecs_per_quarter // PPQN
+        # State tracking
+        self.active_notes: Dict[int, str] = {}  # MIDI note -> note name
+        self.note_start_time: Dict[int, float] = {}  # MIDI note -> start timestamp
+        self.last_note_end_time: float = 0  # Track when last note ended for rest detection
+        self.any_notes_played: bool = False  # Track if we've had any notes yet
         
-        self.processed_notes = []
+        # Setup signal handler for cleanup
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
     
-    def note_to_midi(self, note_input):
-        """Convert note name to MIDI number and tick count"""
-        note_input = note_input.strip()
-        
-        # Handle silence (minus signs)
-        if re.match(r'^-+$', note_input):
-            minus_count = note_input.count('-')
-            return ('REST', minus_count)
-        
-        # Parse note with optional dots
-        match = re.match(r'^([A-G][#B]?)([0-9])(\.*)$', note_input.upper())
-        if not match:
-            raise ValueError(f"Invalid note format '{note_input}'. Use format like C4, F#5.., Bb3..., or --- for rests")
-        
-        note_name, octave, dots = match.groups()
-        octave = int(octave)
-        dot_count = len(dots) if dots else 1  # Default to 1 tick if no dots
-        
-        # Get base note number
-        if note_name not in NOTE_MAP:
-            raise ValueError(f"Invalid note name '{note_name}'")
-        
-        base_note = NOTE_MAP[note_name]
-        
-        # Calculate MIDI note number (Middle C = C4 = 60)
-        midi_note = base_note + (octave + 1) * 12
-        
-        # Validate MIDI note range (0-127)
-        if not (0 <= midi_note <= 127):
-            raise ValueError(f"Note '{note_input}' is out of MIDI range (0-127)")
-        
-        return (midi_note, dot_count)
+    def midi_to_note(self, midi_num: int) -> str:
+        """Convert MIDI number to note name"""
+        octave = (midi_num // 12) - 1
+        note_index = midi_num % 12
+        notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        return f"{notes[note_index]}{octave}"
     
-    def generate_note_on(self, midi_note):
-        """Generate MIDI note-on message"""
-        status_byte = 0x90 + self.channel
-        return f"{status_byte:02X} {midi_note:02X} {self.velocity:02X} "
+    def get_timestamp(self) -> float:
+        """Get current timestamp in milliseconds"""
+        return time.time() * 1000
     
-    def generate_note_off(self, midi_note):
-        """Generate MIDI note-off message"""
-        status_byte = 0x80 + self.channel
-        return f"{status_byte:02X} {midi_note:02X} 00 "
-    
-    def generate_timed_note(self, midi_note, ticks):
-        """Generate timed note sequence"""
-        duration_ms = (ticks * self.microsecs_per_tick) // 1000
+    def output_note_with_duration(self, note: str, start_time: float, end_time: float):
+        """Output note with duration dots and flush immediately"""
+        # Check for silence/rest before this note
+        if self.any_notes_played and self.last_note_end_time > 0:
+            silence_duration = start_time - self.last_note_end_time
+            if silence_duration > TICK_DURATION_MS * 0.5:  # If silence is longer than half a tick
+                silence_ticks = int(silence_duration / TICK_DURATION_MS)
+                silence_ticks = max(1, min(silence_ticks, 24))  # Min 1, max 24 ticks
+                
+                # Output silence as minus signs followed by newline for pipeline compatibility
+                silence_output = '-' * silence_ticks
+                print(silence_output, flush=True)
         
-        if self.note_off == 'auto':
-            # Note-on followed immediately by note-off
-            return self.generate_note_on(midi_note) + self.generate_note_off(midi_note)
-        elif self.note_off == 'timed':
-            # Note-on, then note-off after duration (requires external timing)
-            result = self.generate_note_on(midi_note)
-            if ticks > 0:
-                result += f"# DELAY:{duration_ms}ms # " + self.generate_note_off(midi_note)
-            return result
+        # Calculate duration in ticks (each tick = ~83ms at 120 BPM)
+        duration_ms = end_time - start_time
+        ticks = int(duration_ms / TICK_DURATION_MS)
+        
+        # Minimum 1 tick, maximum 24 ticks for readability (4 quarter notes)
+        ticks = max(1, min(ticks, 24))
+        
+        # Output note with dots followed by newline for pipeline compatibility
+        output = note + '.' * ticks
+        print(output, flush=True)
+        
+        # Update tracking
+        self.last_note_end_time = end_time
+        self.any_notes_played = True
+    
+    def process_midi_message(self, status_byte: int, data1: int, data2: int):
+        """Process a complete MIDI message"""
+        # Extract message type and channel
+        msg_type = (status_byte & 0xF0) >> 4
+        channel = (status_byte & 0x0F) + 1
+        
+        # Apply channel filter
+        if self.channel_filter != 0 and channel != self.channel_filter:
+            return
+        
+        current_time = self.get_timestamp()
+        
+        if msg_type == 9:  # Note On (0x90-0x9F)
+            if data2 > 0:  # Velocity > 0 means note on
+                note = self.midi_to_note(data1)
+                self.active_notes[data1] = note
+                # Use current time as start time for the note
+                self.note_start_time[data1] = current_time
+            else:  # Velocity = 0 means note off
+                if data1 in self.active_notes:
+                    note = self.active_notes[data1]
+                    start_time = self.note_start_time[data1]
+                    self.output_note_with_duration(note, start_time, current_time)
+                    del self.active_notes[data1]
+                    del self.note_start_time[data1]
+        
+        elif msg_type == 8:  # Note Off (0x80-0x8F)
+            if data1 in self.active_notes:
+                note = self.active_notes[data1]
+                start_time = self.note_start_time[data1]
+                self.output_note_with_duration(note, start_time, current_time)
+                del self.active_notes[data1]
+                del self.note_start_time[data1]
+    
+    def read_midi_data(self):
+        """Read and process MIDI data in real-time"""
+        byte_count = 0
+        status_byte = 0
+        data1 = 0
+        data2 = 0
+        
+        # Open MIDI device
+        if self.midi_device == '-':
+            print("Reading MIDI from stdin (Channel filter: {})".format(
+                self.channel_filter if self.channel_filter else 'all'), file=sys.stderr)
+            midi_file = sys.stdin.buffer
         else:
-            # Just note-on
-            return self.generate_note_on(midi_note)
-    
-    def convert_line(self, line):
-        """Convert a line of text notation to MIDI hex"""
-        line = line.strip()
-        if not line:
-            return ""
-        
-        output_hex = ""
-        
-        # Process each note in the line
-        tokens = line.split()
-        for token in tokens:
-            if not token:
-                continue
-            
             try:
-                note_info = self.note_to_midi(token)
+                print(f"Reading MIDI from {self.midi_device} (Channel filter: {self.channel_filter if self.channel_filter else 'all'})", file=sys.stderr)
+                midi_file = open(self.midi_device, 'rb')
+            except IOError as e:
+                print(f"Error: Cannot open MIDI device {self.midi_device}: {e}", file=sys.stderr)
+                print("Available MIDI devices:", file=sys.stderr)
+                try:
+                    import glob
+                    midi_devices = glob.glob('/dev/snd/midi*')
+                    for device in midi_devices:
+                        print(f"  {device}", file=sys.stderr)
+                except:
+                    print("  No MIDI devices found", file=sys.stderr)
+                sys.exit(1)
+        
+        print("Press Ctrl+C to stop", file=sys.stderr)
+        print("", file=sys.stderr)
+        
+        try:
+            # Read bytes one by one for real-time processing
+            while True:
+                byte_data = midi_file.read(1)
+                if not byte_data:
+                    if self.midi_device == '-':
+                        break  # EOF on stdin
+                    else:
+                        continue  # Keep trying for device files
                 
-                # Handle rests (silence) - these are processed but don't generate MIDI output
-                if note_info[0] == 'REST':
-                    rest_ticks = note_info[1]
-                    # For rests, we add timing information as comments for external processing
-                    if self.note_off == 'timed':
-                        rest_duration_ms = (rest_ticks * self.microsecs_per_tick) // 1000
-                        output_hex += f"# REST:{rest_duration_ms}ms # "
-                    # Note: Rests don't generate actual MIDI data, they represent silence
-                    continue
+                byte_val = byte_data[0]
                 
-                midi_note, ticks = note_info
-                
-                # Generate appropriate MIDI output based on mode
-                if self.note_off == 'timed' or (self.note_off == 'auto' and ticks > 0):
-                    output_hex += self.generate_timed_note(midi_note, ticks)
-                else:
-                    output_hex += self.generate_note_on(midi_note)
-                    self.processed_notes.append(midi_note)
+                # Check if this is a status byte (bit 7 set)
+                if byte_val & 0x80:
+                    # Process previous complete message if we have one
+                    if byte_count == 3:
+                        self.process_midi_message(status_byte, data1, data2)
                     
-                    # If auto mode and single tick, add note-off immediately
-                    if self.note_off == 'auto' and ticks == 1:
-                        output_hex += self.generate_note_off(midi_note)
-                        
-            except ValueError as e:
-                print(f"Error: {e}", file=sys.stderr)
-                continue
+                    # Start new message
+                    status_byte = byte_val
+                    byte_count = 1
+                else:
+                    # Data byte
+                    if byte_count == 1:
+                        data1 = byte_val
+                        byte_count = 2
+                    elif byte_count == 2:
+                        data2 = byte_val
+                        byte_count = 3
+                        # Process complete 3-byte message immediately
+                        self.process_midi_message(status_byte, data1, data2)
+                        byte_count = 1  # Reset for next message (keep status byte)
         
-        return output_hex
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if self.midi_device != '-':
+                midi_file.close()
+            self._cleanup_active_notes()
     
-    def finalize(self):
-        """Add final note-off messages if needed"""
-        output_hex = ""
+    def _cleanup_active_notes(self):
+        """Output any remaining active notes during cleanup"""
+        print("", file=sys.stderr)
+        print("Cleaning up active notes...", file=sys.stderr)
         
-        # Add note-off messages for all notes if mode is "on"
-        if self.note_off == 'on':
-            for midi_note in self.processed_notes:
-                output_hex += self.generate_note_off(midi_note)
+        current_time = self.get_timestamp()
+        for midi_num in list(self.active_notes.keys()):
+            note = self.active_notes[midi_num]
+            start_time = self.note_start_time[midi_num]
+            self.output_note_with_duration(note, start_time, current_time)
         
-        return output_hex
+        print("", file=sys.stderr)
+        print("Done.", file=sys.stderr)
+    
+    def _signal_handler(self, signum, frame):
+        """Handle signals gracefully"""
+        self._cleanup_active_notes()
+        sys.exit(0)
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Convert text music notes to MIDI hex output for ALSA rawmidi',
+        description='Convert MIDI rawmidi input to text music notes',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  echo "C4...... D4...... E4......" | python3 notes2midi.py
-  echo "C4... D4... E4..." | python3 notes2midi.py 1 127 auto 120
-  echo "C4. D4. E4. F4." | python3 notes2midi.py 2 100 auto
+  python3 midi2notes.py /dev/snd/midiC2D0 1
+  python3 midi2notes.py /dev/snd/midiC1D0 0  # All channels
+  cat /dev/snd/midiC2D0 | python3 midi2notes.py - 1
   
-Note format:
+Output format:
   C4......  - Quarter note (6 dots)
-  C4...     - Eighth note (3 dots)  
+  C4...     - Eighth note (3 dots)
   C4.       - Sixteenth note (1 dot)
-  ---       - Rest (3 sixteenth rests)
+  Spaces separate notes (representing note-off periods)
         """)
     
-    parser.add_argument('channel', nargs='?', type=int, default=1,
-                       help='MIDI channel (1-16), default: 1')
-    parser.add_argument('velocity', nargs='?', type=int, default=64,
-                       help='Note velocity (0-127), default: 64')
-    parser.add_argument('note_off', nargs='?', default='off',
-                       choices=['on', 'off', 'auto', 'timed'],
-                       help='Note-off handling mode, default: off')
-    parser.add_argument('bpm', nargs='?', type=int, default=120,
-                       help='Beats per minute for timing calculations, default: 120')
+    parser.add_argument('midi_device', nargs='?', default='/dev/snd/midiC2D0',
+                       help='MIDI device path or "-" for stdin (default: /dev/snd/midiC2D0)')
+    parser.add_argument('channel_filter', nargs='?', type=int, default=0,
+                       help='Channel filter: 0=all, 1-16=specific channel (default: 0)')
     
     args = parser.parse_args()
     
     try:
-        converter = MIDIConverter(args.channel, args.velocity, args.note_off, args.bpm)
+        converter = MIDIToNotesConverter(args.midi_device, args.channel_filter)
+        converter.read_midi_data()
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    
-    # Process input from stdin - optimized for pipeline usage
-    try:
-        # Use line buffering for better pipeline compatibility
-        for line in sys.stdin:
-            line = line.strip()
-            if line:
-                line_output = converter.convert_line(line)
-                if line_output.strip():
-                    print(line_output.strip(), flush=True)
-        
-        # Add final note-off messages if needed
-        final_output = converter.finalize()
-        if final_output.strip():
-            print(final_output.strip(), flush=True)
-            
-    except KeyboardInterrupt:
-        # Handle Ctrl+C gracefully
-        output_hex += converter.finalize()
-        if output_hex.strip():
-            print(output_hex.strip())
-        sys.exit(0)
-    except BrokenPipeError:
-        # Handle broken pipe gracefully
-        sys.exit(0)
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
