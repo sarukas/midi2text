@@ -34,6 +34,7 @@ NOTE_MAP = {
     'AB': 8, 'A': 9, 'A#': 10, 'BB': 10, 'B': 11
 }
 
+
 class TimedMIDIConverter:
     def __init__(self, channel=1, velocity=64, note_off='off', bpm=120):
         # Validate parameters
@@ -65,7 +66,7 @@ class TimedMIDIConverter:
         
         if self.note_off == 'realtime':
             self._start_note_off_thread()
-    
+
     def _start_note_off_thread(self):
         """Start background thread for timed note-offs"""
         def note_off_worker():
@@ -90,7 +91,7 @@ class TimedMIDIConverter:
         
         self.note_off_thread = threading.Thread(target=note_off_worker, daemon=True)
         self.note_off_thread.start()
-    
+
     def note_to_midi(self, note_input):
         """Convert note name to MIDI number and tick count"""
         note_input = note_input.strip()
@@ -123,17 +124,17 @@ class TimedMIDIConverter:
             raise ValueError(f"Note '{note_input}' is out of MIDI range (0-127)")
         
         return (midi_note, dot_count)
-    
+
     def generate_note_on(self, midi_note):
         """Generate MIDI note-on message"""
         status_byte = 0x90 + self.channel
         return f"{status_byte:02X} {midi_note:02X} {self.velocity:02X} "
-    
+
     def generate_note_off(self, midi_note):
         """Generate MIDI note-off message"""
         status_byte = 0x80 + self.channel
         return f"{status_byte:02X} {midi_note:02X} 00 "
-    
+
     def convert_line(self, line):
         """Convert a line of text notation to MIDI hex with timing"""
         line = line.strip()
@@ -198,7 +199,7 @@ class TimedMIDIConverter:
                 continue
         
         return output_hex
-    
+
     def finalize(self):
         """Add final note-off messages if needed"""
         output_hex = ""
@@ -215,6 +216,7 @@ class TimedMIDIConverter:
                 output_hex += self.generate_note_off(midi_note)
         
         return output_hex
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -275,6 +277,7 @@ Note format:
     except BrokenPipeError:
         # Handle broken pipe gracefully
         sys.exit(0)
+
 
 if __name__ == '__main__':
     main()
