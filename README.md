@@ -49,8 +49,8 @@ A pair of Linux shell scripts that convert between text-based music notation and
 
 1. **Download the scripts:**
   
-      wget https://github.com/your-repo/notes2midi.sh
-      wget https://github.com/your-repo/midi2notes.sh
+      wget https://github.com/sarukas/midi2text/notes2midi.sh
+      wget https://github.com/sarukas/midi2text/midi2notes.sh
   
 2. **Make executable:**
   
