@@ -206,23 +206,20 @@ Note format:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     
-    # Process input from stdin
-    output_hex = ""
-    
+    # Process input from stdin - optimized for pipeline usage
     try:
+        # Use line buffering for better pipeline compatibility
         for line in sys.stdin:
-            line_output = converter.convert_line(line)
-            output_hex += line_output
+            line = line.strip()
+            if line:
+                line_output = converter.convert_line(line)
+                if line_output.strip():
+                    print(line_output.strip(), flush=True)
         
         # Add final note-off messages if needed
-        output_hex += converter.finalize()
-        
-        # Output the hex data
-        if output_hex.strip():
-            print(output_hex.strip())
-        else:
-            print("Error: No valid notes found in input", file=sys.stderr)
-            sys.exit(1)
+        final_output = converter.finalize()
+        if final_output.strip():
+            print(final_output.strip(), flush=True)
             
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully
