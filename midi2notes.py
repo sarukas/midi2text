@@ -36,6 +36,8 @@ class MIDIToNotesConverter:
         # State tracking
         self.active_notes: Dict[int, str] = {}  # MIDI note -> note name
         self.note_start_time: Dict[int, float] = {}  # MIDI note -> start timestamp
+        self.last_note_end_time: float = 0  # Track when last note ended for rest detection
+        self.any_notes_played: bool = False  # Track if we've had any notes yet
         
         # Setup signal handler for cleanup
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -54,6 +56,17 @@ class MIDIToNotesConverter:
     
     def output_note_with_duration(self, note: str, start_time: float, end_time: float):
         """Output note with duration dots and flush immediately"""
+        # Check for silence/rest before this note
+        if self.any_notes_played and self.last_note_end_time > 0:
+            silence_duration = start_time - self.last_note_end_time
+            if silence_duration > TICK_DURATION_MS * 0.5:  # If silence is longer than half a tick
+                silence_ticks = int(silence_duration / TICK_DURATION_MS)
+                silence_ticks = max(1, min(silence_ticks, 24))  # Min 1, max 24 ticks
+                
+                # Output silence as minus signs
+                silence_output = '-' * silence_ticks + ' '
+                print(silence_output, end='', flush=True)
+        
         # Calculate duration in ticks (each tick = ~83ms at 120 BPM)
         duration_ms = end_time - start_time
         ticks = int(duration_ms / TICK_DURATION_MS)
@@ -64,6 +77,10 @@ class MIDIToNotesConverter:
         # Output note with dots and flush immediately
         output = note + '.' * ticks + ' '
         print(output, end='', flush=True)
+        
+        # Update tracking
+        self.last_note_end_time = end_time
+        self.any_notes_played = True
     
     def process_midi_message(self, status_byte: int, data1: int, data2: int):
         """Process a complete MIDI message"""
@@ -81,6 +98,7 @@ class MIDIToNotesConverter:
             if data2 > 0:  # Velocity > 0 means note on
                 note = self.midi_to_note(data1)
                 self.active_notes[data1] = note
+                # Use current time as start time for the note
                 self.note_start_time[data1] = current_time
             else:  # Velocity = 0 means note off
                 if data1 in self.active_notes:
