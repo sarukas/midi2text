@@ -131,13 +131,14 @@ class MIDIConverter:
             try:
                 note_info = self.note_to_midi(token)
                 
-                # Handle rests (silence)
+                # Handle rests (silence) - these are processed but don't generate MIDI output
                 if note_info[0] == 'REST':
                     rest_ticks = note_info[1]
-                    # For rests, we just add a comment or skip (no MIDI output for silence)
+                    # For rests, we add timing information as comments for external processing
                     if self.note_off == 'timed':
                         rest_duration_ms = (rest_ticks * self.microsecs_per_tick) // 1000
                         output_hex += f"# REST:{rest_duration_ms}ms # "
+                    # Note: Rests don't generate actual MIDI data, they represent silence
                     continue
                 
                 midi_note, ticks = note_info
@@ -149,7 +150,7 @@ class MIDIConverter:
                     output_hex += self.generate_note_on(midi_note)
                     self.processed_notes.append(midi_note)
                     
-                    # If auto mode and no ticks, add note-off immediately
+                    # If auto mode and single tick, add note-off immediately
                     if self.note_off == 'auto' and ticks == 1:
                         output_hex += self.generate_note_off(midi_note)
                         
