@@ -35,84 +35,6 @@ NOTE_MAP = {
 }
 
 class TimedMIDIConverter:
-    def finalize(self):
-        """Add final note-off messages if needed"""
-        output_hex = ""
-        
-        # Stop note-off thread
-        if self.note_off_thread:
-            self.stop_thread = True
-            # Wait a bit for any pending note-offs
-            time.sleep(0.5)
-        
-        # Add note-off messages for all notes if mode is "on"
-        if self.note_off == 'on':
-            for midi_note in self.processed_notes:
-                output_hex += self.generate_note_off(midi_note)
-        
-        return output_hex
-
-def main():
-    parser = argparse.ArgumentParser(
-        description='Convert text music notes to MIDI hex output for ALSA rawmidi',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  echo "C4...... D4...... E4......" | python3 notes2midi.py
-  echo "C4... D4... E4..." | python3 notes2midi.py 1 127 realtime 120
-  echo "C4. D4. E4. F4." | python3 notes2midi.py 2 100 auto
-  
-Note format:
-  C4......  - Quarter note (6 dots)
-  C4...     - Eighth note (3 dots)  
-  C4.       - Sixteenth note (1 dot)
-  ---       - Rest (3 sixteenth rests)
-        """)
-    
-    parser.add_argument('channel', nargs='?', type=int, default=1,
-                       help='MIDI channel (1-16), default: 1')
-    parser.add_argument('velocity', nargs='?', type=int, default=64,
-                       help='Note velocity (0-127), default: 64')
-    parser.add_argument('note_off', nargs='?', default='off',
-                       choices=['on', 'off', 'auto', 'timed', 'realtime'],
-                       help='Note-off handling mode, default: off')
-    parser.add_argument('bpm', nargs='?', type=int, default=120,
-                       help='Beats per minute for timing calculations, default: 120')
-    
-    args = parser.parse_args()
-    
-    try:
-        converter = TimedMIDIConverter(args.channel, args.velocity, args.note_off, args.bpm)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    
-    # Process input from stdin - optimized for pipeline usage
-    try:
-        # Use line buffering for better pipeline compatibility
-        for line in sys.stdin:
-            line = line.strip()
-            if line:
-                line_output = converter.convert_line(line)
-                if line_output.strip():
-                    print(line_output.strip(), flush=True)
-        
-        # Add final note-off messages if needed
-        final_output = converter.finalize()
-        if final_output.strip():
-            print(final_output.strip(), flush=True)
-            
-    except KeyboardInterrupt:
-        # Handle Ctrl+C gracefully
-        final_output = converter.finalize()
-        if final_output.strip():
-            print(final_output.strip(), flush=True)
-        sys.exit(0)
-    except BrokenPipeError:
-        # Handle broken pipe gracefully
-        sys.exit(0)
-
-if __name__ == '__main__':
     def __init__(self, channel=1, velocity=64, note_off='off', bpm=120):
         # Validate parameters
         if not (1 <= channel <= 16):
@@ -277,4 +199,82 @@ if __name__ == '__main__':
         
         return output_hex
     
-    def
+    def finalize(self):
+        """Add final note-off messages if needed"""
+        output_hex = ""
+        
+        # Stop note-off thread
+        if self.note_off_thread:
+            self.stop_thread = True
+            # Wait a bit for any pending note-offs
+            time.sleep(0.5)
+        
+        # Add note-off messages for all notes if mode is "on"
+        if self.note_off == 'on':
+            for midi_note in self.processed_notes:
+                output_hex += self.generate_note_off(midi_note)
+        
+        return output_hex
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Convert text music notes to MIDI hex output for ALSA rawmidi',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  echo "C4...... D4...... E4......" | python3 notes2midi.py
+  echo "C4... D4... E4..." | python3 notes2midi.py 1 127 realtime 120
+  echo "C4. D4. E4. F4." | python3 notes2midi.py 2 100 auto
+  
+Note format:
+  C4......  - Quarter note (6 dots)
+  C4...     - Eighth note (3 dots)  
+  C4.       - Sixteenth note (1 dot)
+  ---       - Rest (3 sixteenth rests)
+        """)
+    
+    parser.add_argument('channel', nargs='?', type=int, default=1,
+                       help='MIDI channel (1-16), default: 1')
+    parser.add_argument('velocity', nargs='?', type=int, default=64,
+                       help='Note velocity (0-127), default: 64')
+    parser.add_argument('note_off', nargs='?', default='off',
+                       choices=['on', 'off', 'auto', 'timed', 'realtime'],
+                       help='Note-off handling mode, default: off')
+    parser.add_argument('bpm', nargs='?', type=int, default=120,
+                       help='Beats per minute for timing calculations, default: 120')
+    
+    args = parser.parse_args()
+    
+    try:
+        converter = TimedMIDIConverter(args.channel, args.velocity, args.note_off, args.bpm)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Process input from stdin - optimized for pipeline usage
+    try:
+        # Use line buffering for better pipeline compatibility
+        for line in sys.stdin:
+            line = line.strip()
+            if line:
+                line_output = converter.convert_line(line)
+                if line_output.strip():
+                    print(line_output.strip(), flush=True)
+        
+        # Add final note-off messages if needed
+        final_output = converter.finalize()
+        if final_output.strip():
+            print(final_output.strip(), flush=True)
+            
+    except KeyboardInterrupt:
+        # Handle Ctrl+C gracefully
+        final_output = converter.finalize()
+        if final_output.strip():
+            print(final_output.strip(), flush=True)
+        sys.exit(0)
+    except BrokenPipeError:
+        # Handle broken pipe gracefully
+        sys.exit(0)
+
+if __name__ == '__main__':
+    main()
