@@ -3,33 +3,32 @@
 ./midi2notes.sh [midi_device] [channel_filter]
 ./notes2midi.sh [midi_device] [channel_filter]
 
-## Read from specific MIDI device, all channels
+*Read from specific MIDI device, all channels*
 ./midi2notes.sh /dev/snd/midiC1D0 0
 
-## Read from stdin, filter channel 1
+*Read from stdin, filter channel 1*
 cat /dev/snd/midiC1D0 | ./midi2notes.sh - 1
 
-## List available MIDI devices first
+*List available MIDI devices first*
 ls /dev/snd/midi*
 
 # Get started 
 chmod +x notes2midi.sh midi2notes.sh
 
-## Convert text to MIDI and play
+*Convert text to MIDI and play*
 echo "C4. D4.. E4... F4." | ./notes2midi.sh 1 127 auto | xxd -r -p > /dev/snd/midiC1D0
 
-## Record MIDI to text (in another terminal)
+*Record MIDI to text (in another terminal)*
 ./midi2notes.sh /dev/snd/midiC1D0 1 > recorded_notes.txt
 
-## Test the round-trip
+*Test the round-trip*
 echo "C4.. D4. E4... G4." > test_notes.txt
 cat test_notes.txt | ./notes2midi.sh 1 100 auto | xxd -r -p > /dev/snd/midiC1D0
-# (midi2notes.sh running in background will capture and convert back)
 
-## Basic conversion with auto note-off
+*Basic conversion with auto note-off*
 echo "C4... D4. - E4...... --" | ./notes2midi.sh 1 127 auto 120
 
-## Record MIDI and see the notation
+*Record MIDI and see the notation*
 ./midi2notes.sh /dev/snd/midiC1D0 1
 
 # Complete round-trip test
