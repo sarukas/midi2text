@@ -65,15 +65,15 @@ output_note_with_duration() {
         ticks=24
     fi
     
-    # Output note with dots immediately
-    printf "%s" "$note"
+    # Output note with dots and flush immediately
+    echo -n "$note"
     for ((i=0; i<ticks; i++)); do
-        printf "."
+        echo -n "."
     done
-    printf " "
+    echo -n " "
     
-    # Force immediate output (flush stdout)
-    exec >&1
+    # Force flush to stdout immediately
+    sync
 }
 
 # Function to process MIDI message
@@ -128,8 +128,28 @@ read_midi_data() {
     local data1=""
     local data2=""
     
-    # Disable buffering for real-time output
-    stdbuf -oL cat < "$1" | while IFS= read -r -n1 byte; do
+    if [ "$MIDI_DEVICE" = "-" ]; then
+        # Read from stdin
+        exec < /dev/stdin
+    else
+        # Check if MIDI device exists
+        if [ ! -e "$MIDI_DEVICE" ]; then
+            echo "Error: MIDI device $MIDI_DEVICE not found" >&2
+            echo "Available MIDI devices:" >&2
+            ls -la /dev/snd/midi* 2>/dev/null >&2 || echo "No MIDI devices found" >&2
+            exit 1
+        fi
+        
+        # Read from MIDI device
+        exec < "$MIDI_DEVICE"
+    fi
+    
+    echo "Reading MIDI from $MIDI_DEVICE (Channel filter: ${CHANNEL_FILTER:-all})" >&2
+    echo "Press Ctrl+C to stop" >&2
+    echo "" >&2
+    
+    # Read bytes one by one
+    while IFS= read -r -n1 byte; do
         # Convert to hex
         hex_byte=$(printf "%02X" "'$byte" 2>/dev/null)
         
@@ -158,39 +178,13 @@ read_midi_data() {
                 2)
                     data2="$hex_byte"
                     byte_count=3
-                    # Process complete 3-byte message immediately
+                    # Process complete 3-byte message
                     process_midi_message $(hex_to_dec "$status_byte") $(hex_to_dec "$data1") $(hex_to_dec "$data2")
                     byte_count=1  # Reset for next message (keep status byte)
                     ;;
             esac
         fi
     done
-}
-
-# Main execution
-main() {
-    if [ "$MIDI_DEVICE" = "-" ]; then
-        echo "Reading MIDI from stdin (Channel filter: ${CHANNEL_FILTER:-all})" >&2
-    else
-        # Check if MIDI device exists
-        if [ ! -e "$MIDI_DEVICE" ]; then
-            echo "Error: MIDI device $MIDI_DEVICE not found" >&2
-            echo "Available MIDI devices:" >&2
-            ls -la /dev/snd/midi* 2>/dev/null >&2 || echo "No MIDI devices found" >&2
-            exit 1
-        fi
-        echo "Reading MIDI from $MIDI_DEVICE (Channel filter: ${CHANNEL_FILTER:-all})" >&2
-    fi
-    
-    echo "Press Ctrl+C to stop" >&2
-    echo "" >&2
-    
-    # Set up for real-time processing
-    if [ "$MIDI_DEVICE" = "-" ]; then
-        read_midi_data "/dev/stdin"
-    else
-        read_midi_data "$MIDI_DEVICE"
-    fi
 }
 
 # Cleanup function
@@ -215,4 +209,4 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 # Start reading MIDI data
-main
+read_midi_data
